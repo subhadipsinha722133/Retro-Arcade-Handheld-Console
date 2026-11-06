@@ -21,7 +21,7 @@
 #define SCREEN_H  240
 #define HUD_H     28
 
-// Colors (No Inversion Mismatch)
+// Colors (RGB565 Palette)
 #define C_BG          0x0000
 #define C_BLACK       0x0000
 #define C_WHITE       0xFFFF
@@ -126,7 +126,26 @@ void updateHUDScore() {
   tft.printf("SC:%05ld", score);
 }
 
+// Forward Declarations
 void drawMenu();
+void restartCurrentGame();
+
+void initFlappy();    void loopFlappy();
+void initSpace();     void loopSpace();
+void initShooter();   void loopShooter();
+void initSnake();     void loopSnake();
+void initBrick();     void loopBrick();
+void initMario();     void loopMario();
+void initDino();      void loopDino();
+void initRacing();    void loopRacing();
+void initPong();      void loopPong();
+void initDefender();  void loopDefender();
+void initRiver();     void loopRiver();
+void initPacmanPro(); void loopPacmanPro();
+void initAsteroids(); void loopAsteroids();
+void initGalaga();    void loopGalaga();
+void initFrogger();   void loopFrogger();
+void initTank();      void loopTank();
 
 bool checkUniversalControls() {
   if (isPressed(PIN_BTN_B)) {
@@ -157,43 +176,128 @@ bool checkUniversalControls() {
   return false;
 }
 
-void triggerGameOverScreen(const char* deathMsg) {
-  sfxGameOver();
-  tft.fillRect(40, 70, 240, 100, C_RED);
-  tft.drawRect(40, 70, 240, 100, C_WHITE);
-  tft.setTextColor(C_WHITE);
-  tft.setTextSize(2);
-  tft.setCursor(75, 85);
-  tft.print("GAME OVER");
-  tft.setTextSize(1);
-  tft.setTextColor(C_YELLOW);
-  tft.setCursor(65, 115);
-  tft.print(deathMsg);
-  tft.setTextColor(C_WHITE);
-  tft.setCursor(95, 138);
-  tft.printf("FINAL SCORE: %ld", score);
-  delay(1800);
-  currentState = MENU;
-  drawMenu();
+void restartCurrentGame() {
+  tft.fillScreen(C_BG);
+  score = 0;
+  isPaused = false;
+  switch (currentState) {
+    case G_FLAPPY:    initFlappy();    break;
+    case G_SPACE:     initSpace();     break;
+    case G_SNAKE:     initSnake();     break;
+    case G_BRICK:     initBrick();     break;
+    case G_MARIO:     initMario();     break;
+    case G_DINO:      initDino();      break;
+    case G_RACING:    initRacing();    break;
+    case G_PONG:      initPong();      break;
+    case G_SHOOTER:   initShooter();   break;
+    case G_RIVER:     initRiver();     break;
+    case G_PACMAN:    initPacmanPro(); break;
+    case G_ASTEROIDS: initAsteroids(); break;
+    case G_GALAGA:    initGalaga();    break;
+    case G_COPTER:    initFrogger();   break;
+    case G_SUBMARINE: initTank();      break;
+    default:
+      currentState = MENU;
+      drawMenu();
+      break;
+  }
 }
 
+void triggerGameOverScreen(const char* reason) {
+  // Center Box: Width 280 (X: 20 to 300)
+  tft.fillRoundRect(20, 50, 280, 140, 8, C_RED);
+  tft.drawRoundRect(20, 50, 280, 140, 8, C_WHITE);
+  tft.drawRoundRect(22, 52, 276, 136, 6, C_YELLOW);
+
+  // "GAME OVER" (9 chars * 12 = 108px -> Center X = 106)
+  tft.setTextSize(2);
+  tft.setTextColor(C_WHITE);
+  tft.setCursor(106, 64);
+  tft.print("GAME OVER");
+
+  // Dynamic Reason Text Centering
+  int rLen = strlen(reason);
+  int rWidth = rLen * 6; // TextSize 1 is 6px per char
+  int rX = max(26, (SCREEN_W - rWidth) / 2);
+  tft.setTextSize(1);
+  tft.setTextColor(C_YELLOW);
+  tft.setCursor(rX, 92);
+  tft.print(reason);
+
+  // Score Line Centering
+  char scoreBuf[30];
+  sprintf(scoreBuf, "FINAL SCORE: %ld", score);
+  int sWidth = strlen(scoreBuf) * 6;
+  int sX = (SCREEN_W - sWidth) / 2;
+  tft.setTextColor(C_WHITE);
+  tft.setCursor(sX, 112);
+  tft.print(scoreBuf);
+
+  // Symmetrical Option Buttons (Left: X=35, Right: X=165, Width=120 each)
+  tft.fillRoundRect(35, 140, 120, 28, 5, C_GREEN);
+  tft.drawRoundRect(35, 140, 120, 28, 5, C_WHITE);
+  tft.setTextColor(C_BLACK);
+  tft.setTextSize(1);
+  // "[A] REPLAY" (10 chars * 6 = 60px -> Box Center = 35 + (120-60)/2 = 65)
+  tft.setCursor(65, 150);
+  tft.print("[A] REPLAY");
+
+  tft.fillRoundRect(165, 140, 120, 28, 5, C_DGREY);
+  tft.drawRoundRect(165, 140, 120, 28, 5, C_WHITE);
+  tft.setTextColor(C_WHITE);
+  // "[B] BACK MENU" (13 chars * 6 = 78px -> Box Center = 165 + (120-78)/2 = 186)
+  tft.setCursor(186, 150);
+  tft.print("[B] BACK MENU");
+
+  delay(400);
+
+  // Input Wait Loop
+  while (true) {
+    if (isPressed(PIN_BTN_A)) {
+      sfxScoreDing();
+      delay(200);
+      restartCurrentGame();
+      return;
+    }
+
+    if (isPressed(PIN_BTN_B)) {
+      sfxBounce();
+      score = 0;
+      isPaused = false;
+      delay(200);
+      currentState = MENU;
+      drawMenu();
+      return;
+    }
+
+    delay(20);
+  }
+}
 void drawSplashScreen() {
   tft.fillScreen(C_BG);
   tft.drawRect(4, 4, 312, 232, C_CYAN);
   tft.drawRect(6, 6, 308, 228, C_NAVY);
+
+  // "RETRO STATION" (13 chars * 18 = 234px -> Center X = 43)
   tft.setTextColor(C_YELLOW);
   tft.setTextSize(3);
-  tft.setCursor(35, 40);
-  tft.print("ARCADE SYSTEM");
-  tft.fillRoundRect(25, 90, 270, 52, 8, C_NAVY);
-  tft.drawRoundRect(25, 90, 270, 52, 8, C_ORANGE);
+  tft.setCursor(43, 38);
+  tft.print("RETRO STATION");
+
+  // Center banner box (X = 25 se 270w -> Center X 160)
+  tft.fillRoundRect(25, 88, 270, 50, 8, C_NAVY);
+  tft.drawRoundRect(25, 88, 270, 50, 8, C_ORANGE);
+
+  // "MADE BY SUBHADIP" (16 chars * 12 = 192px -> Center X = 64)
   tft.setTextColor(C_WHITE);
   tft.setTextSize(2);
-  tft.setCursor(50, 108);
+  tft.setCursor(64, 105);
   tft.print("MADE BY SUBHADIP");
+
+  // ">> PRESS [A] PLAY <<" (20 chars * 12 = 240px -> Center X = 40)
   tft.setTextColor(C_GREEN);
   tft.setTextSize(2);
-  tft.setCursor(45, 175);
+  tft.setCursor(40, 172);
   tft.print(">> PRESS [A] PLAY <<");
 
   playSound(440, 60); delay(30);
@@ -201,6 +305,7 @@ void drawSplashScreen() {
   playSound(659, 60); delay(30);
   playSound(880, 140);
 }
+
 
 void handleSplash() {
   if (isPressed(PIN_BTN_A)) {
@@ -216,6 +321,7 @@ void updateMenuList() {
   for (int i = 0; i < 5; i++) {
     int gIdx = pageStart + i;
     int y = 46 + (i * 34);
+
     if (gIdx < TOTAL_GAMES) {
       if (gIdx == selectedGame) {
         tft.fillRoundRect(20, y, 280, 28, 6, C_ORANGE);
@@ -224,8 +330,11 @@ void updateMenuList() {
         tft.fillRoundRect(20, y, 280, 28, 6, C_DGREY);
         tft.setTextColor(C_WHITE);
       }
+
       tft.setTextSize(2);
-      tft.setCursor(32, y + 6);
+      
+      // Fixed Left Alignment: Sabhi game titles X=35 se ek seedh mein shuru honge
+      tft.setCursor(35, y + 6);
       tft.print(gameTitles[gIdx]);
     } else {
       tft.fillRect(20, y, 280, 28, C_BG);
@@ -234,40 +343,39 @@ void updateMenuList() {
 }
 
 void drawMenu() {
+  // 1. Screen background clear
   tft.fillScreen(C_BG);
-  tft.fillRect(0, 0, SCREEN_W, 36, C_NAVY);
-  tft.drawFastHLine(0, 36, SCREEN_W, C_ORANGE);
-  tft.setTextColor(C_YELLOW);
+
+  // 2. Header Background Box (Color Block)
+  // X: 0, Y: 0, Width: 320, Height: 44
+  tft.fillRect(0, 0, 320, 44, C_NAVY); 
+  tft.drawFastHLine(0, 43, 320, C_CYAN); // Bottom divider line
+
+  // Header Title ("15-IN-1 ARCADE" -> 14 chars * 12px = 168px -> Center X = (320 - 168)/2 = 76)
   tft.setTextSize(2);
-  tft.setCursor(12, 10);
+  tft.setTextColor(C_WHITE, C_NAVY);
+  tft.setCursor(76, 8);
   tft.print("15-IN-1 ARCADE");
-  tft.setTextColor(C_CYAN);
+
+  // Subtitle ("BY SUBHADIP" -> 11 chars * 6px = 66px -> Center X = (320 - 66)/2 = 127)
   tft.setTextSize(1);
-  tft.setCursor(205, 14);
+  tft.setTextColor(C_YELLOW, C_NAVY);
+  tft.setCursor(127, 28);
   tft.print("BY SUBHADIP");
-  tft.setTextColor(C_LGREY);
+
+  // 3. Footer Bar with Color
+  tft.fillRect(0, 220, 320, 20, C_NAVY);
+  tft.drawFastHLine(0, 219, 320, C_CYAN);
   tft.setTextSize(1);
-  tft.setCursor(18, 222);
+  tft.setTextColor(C_WHITE, C_NAVY);
+  tft.setCursor(20, 226);
   tft.print("Joy: Select | A: Play | P: Pause | B: Menu");
+
+  // 4. Menu list render
   updateMenuList();
 }
 
-// Forward Declarations
-void initFlappy();    void loopFlappy();
-void initSpace();     void loopSpace();
-void initSnake();     void loopSnake();
-void initBrick();     void loopBrick();
-void initMario();     void loopMario();
-void initDino();      void loopDino();
-void initRacing();    void loopRacing();
-void initPong();      void loopPong();
-void initShooter();   void loopShooter();
-void initRiver();     void loopRiver();
-void initPacmanPro(); void loopPacmanPro();
-void initAsteroids(); void loopAsteroids();
-void initGalaga();    void loopGalaga();
-void initFrogger();   void loopFrogger();
-void initTank();      void loopTank();
+
 
 void handleMenu() {
   if (millis() - lastDebounceTime > 260) {
