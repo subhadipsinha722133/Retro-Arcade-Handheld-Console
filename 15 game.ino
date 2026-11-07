@@ -62,7 +62,7 @@ const char* gameTitles[] = {
   "4. BRICK BREAKER",    "5. MARIO RUNNER",   "6. CHROME DINO PRO",
   "7. RETRO RACING",     "8. PONG VS AI",     "9. TARGET SHOOT",
   "10. RIVER RAID JET",  "11. PAC-MAN ARCADE","12. ASTEROID FIELD",
-  "13. GALAGA WAVES",    "14. FROGGER RETRO", "15. COMBAT TANK 90"
+  "13. GALAGA WAVES",    "14. DAN THE MAN", "15. COMBAT TANK 90"
 };
 
 unsigned long lastDebounceTime = 0;
@@ -144,8 +144,10 @@ void initRiver();     void loopRiver();
 void initPacmanPro(); void loopPacmanPro();
 void initAsteroids(); void loopAsteroids();
 void initGalaga();    void loopGalaga();
-void initFrogger();   void loopFrogger();
+void initDan();       void loopDan();
+void initFrogger();   void loopFrogger(); // Linker safety ke liye
 void initTank();      void loopTank();
+
 
 bool checkUniversalControls() {
   if (isPressed(PIN_BTN_B)) {
@@ -170,7 +172,12 @@ bool checkUniversalControls() {
       tft.setCursor(88, 126);
       tft.print("PRESS [P] TO RESUME");
     } else {
-      tft.fillRect(70, 90, 180, 56, C_BG);
+      // Resume hone par game arena clean refresh hoga
+      if (currentState == G_COPTER) {
+        initDan();
+      } else {
+        tft.fillRect(70, 90, 180, 56, C_BG);
+      }
     }
   }
   return false;
@@ -194,7 +201,7 @@ void restartCurrentGame() {
     case G_PACMAN:    initPacmanPro(); break;
     case G_ASTEROIDS: initAsteroids(); break;
     case G_GALAGA:    initGalaga();    break;
-    case G_COPTER:    initFrogger();   break;
+    case G_COPTER:    initDan();       break; // Sirf ek baar initDan()
     case G_SUBMARINE: initTank();      break;
     default:
       currentState = MENU;
@@ -413,7 +420,7 @@ void handleMenu() {
       case 10: currentState = G_PACMAN;    initPacmanPro(); break;
       case 11: currentState = G_ASTEROIDS; initAsteroids(); break;
       case 12: currentState = G_GALAGA;    initGalaga();    break;
-      case 13: currentState = G_COPTER;    initFrogger();   break;
+      case 13: currentState = G_COPTER;    initDan();       break; // <--- YAHAN LIKH DIYA
       case 14: currentState = G_SUBMARINE; initTank();      break;
     }
   }
@@ -2595,241 +2602,470 @@ void loopGalaga() {
   delay(24);
 }
 
-
 // -------------------------------------------------------------
-// GAME 14: FROGGER ARCADE (Fixed Color Mismatch & Ghosting)
+// GAME 14: DAN THE MAN ARCADE (Permanent Wall & Instant Death Fix)
 // -------------------------------------------------------------
-#define FROG_SIZE       14
-#define FROG_STEP_X     20
-#define FROG_STEP_Y     22
+#define DAN_SKY       0x5D3F
+#define DAN_GRASS     0x2404
+#define DAN_DIRT      0x7A43
+#define DAN_FLOOR_Y   198
+#define DAN_MTN_COL   0x39E7
 
-int frogX, frogY, oldFrogX, oldFrogY;
-int frogAnimFrame = 0;
+// Hero (Dan) State
+int danX = 40, danY = DAN_FLOOR_Y;
+int oldDanX = 40, oldDanY = DAN_FLOOR_Y;
+float danVy = 0;
+bool danGrounded = true;
+bool danCrouch = false;
+int danFacing = 1;
+bool danPunching = false;
+int danPunchTimer = 0;
 
-// Road Traffic (2 Lanes)
-struct FroggerCar {
-  int x;
-  int y;
-  int speed;
-  int width;
-  uint16_t color;
-};
+// Hero Projectile
+int danBulletX = -10, danBulletY = -10;
+int danBulletDir = 1;
+bool danBulletActive = false;
 
-FroggerCar fCars[3] = {
-  { 40,  168,  4, 28, C_RED },
-  { 180, 168,  4, 28, C_RED },
-  { 220, 146, -3, 34, C_YELLOW }
-};
+// Enemy Soldier
+int enemyX = 270, enemyY = DAN_FLOOR_Y;
+int oldEnemyX = 270, oldEnemyY = DAN_FLOOR_Y;
+int enemyDir = -1;
+bool enemyAlive = true;
+int enemyHealth = 3;
+int enemyShootTimer = 0;
+int respawnCounter = 0;
 
-// River Logs (1 Lane)
-struct RiverLog {
-  int x;
-  int y;
-  int speed;
-  int width;
-};
+// Enemy Projectile (Shuriken)
+int enBulletX = -10, enBulletY = -10;
+int enBulletDir = -1;
+bool enBulletActive = false;
 
-RiverLog fLogs[2] = {
-  { 50,  96,  3, 50 },
-  { 210, 96,  3, 50 }
-};
+// Floating Brick Platform
+int platX = 115, platY = 150, platW = 90, platH = 10;
 
-// Sahi background color detection taaki koi bhi wrong color trail na bane
-uint16_t getFrogZoneColor(int y) {
-  if (y >= 186) return C_DGREEN;                  // Bottom start grass
-  if (y >= 136 && y < 186) return C_ROADGREY;     // Highway road
-  if (y >= 116 && y < 136) return C_DGREEN;       // Middle safe strip
-  if (y >= 64 && y < 116) return C_BLUE;          // River water
-  return C_DGREEN;                                // Top goal grass
+// Ambient Birds & Clouds
+int danCloud1X = 130, danCloud2X = 270;
+int danBirdX = 210, danBirdY = HUD_H + 16;
+int danBirdWing = 0;
+int danTick = 0;
+
+bool isPointInsideMountain(int px, int py) {
+  if (py < 70 || py > 142) return false;
+  
+  if (px >= 15 && px <= 135) {
+    int mtnTopY = (px <= 75) ? (142 - ((px - 15) * 67) / 60) : (75 + ((px - 75) * 67) / 60);
+    if (py >= mtnTopY) return true;
+  }
+
+  if (px >= 185 && px <= 315) {
+    int mtnTopY = (px <= 250) ? (142 - ((px - 185) * 72) / 65) : (70 + ((px - 250) * 72) / 65);
+    if (py >= mtnTopY) return true;
+  }
+
+  return false;
 }
 
-void drawFrogSprite(int x, int y, bool erase) {
+// Platform Protection Check
+bool isPointInsidePlatform(int px, int py) {
+  return (px >= platX && px < platX + platW && py >= platY && py < platY + platH);
+}
+
+// Smart Area Restore (Preserves Mountain, Platform & Sky)
+void restoreSceneryRect(int rx, int ry, int rw, int rh) {
+  int xEnd = min(SCREEN_W, rx + rw);
+  int yEnd = min(DAN_FLOOR_Y, ry + rh);
+  int xStart = max(0, rx);
+  int yStart = max(HUD_H, ry);
+
+  for (int x = xStart; x < xEnd; x++) {
+    for (int y = yStart; y < yEnd; y++) {
+      uint16_t col;
+      if (isPointInsidePlatform(x, y)) {
+        col = (y == platY) ? C_GREEN : C_BROWN; // Wall brick protect
+      } else if (isPointInsideMountain(x, y)) {
+        col = DAN_MTN_COL;                      // Mountain protect
+      } else {
+        col = DAN_SKY;                          // Sky
+      }
+      tft.drawPixel(x, y, col);
+    }
+  }
+}
+
+void drawDanCloud(int x, int y, bool erase) {
+  uint16_t c = erase ? DAN_SKY : C_WHITE;
+  tft.fillRoundRect(x, y + 3, 26, 8, 3, c);
+  tft.fillRoundRect(x + 5, y, 16, 8, 3, c);
+}
+
+void drawDanBird(int x, int y, int wingState, bool erase) {
   if (erase) {
-    uint16_t cBg = getFrogZoneColor(y);
-    tft.fillRect(x - 2, y - 2, FROG_SIZE + 4, FROG_SIZE + 4, cBg);
+    tft.fillRect(x - 2, y - 4, 14, 10, DAN_SKY);
+    return;
+  }
+  if (wingState % 2 == 0) {
+    tft.drawLine(x, y, x + 4, y + 2, C_BLACK);
+    tft.drawLine(x + 4, y + 2, x + 8, y, C_BLACK);
+  } else {
+    tft.drawLine(x, y + 2, x + 4, y, C_BLACK);
+    tft.drawLine(x + 4, y, x + 8, y + 2, C_BLACK);
+  }
+}
+
+void drawDanSprite(int x, int y, int facing, bool punch, bool crouch, bool erase) {
+  if (erase) {
+    restoreSceneryRect(x - 8, y - 25, 30, 27);
     return;
   }
 
-  // Frog Body
-  tft.fillRoundRect(x + 2, y + 2, FROG_SIZE - 4, FROG_SIZE - 4, 3, C_GREEN);
-  tft.fillRect(x + 4, y + 4, FROG_SIZE - 8, FROG_SIZE - 8, C_PEACH);
+  int offsetY = crouch ? 6 : 0;
 
-  // Eyes
-  tft.fillCircle(x + 3, y + 2, 2, C_WHITE);
-  tft.drawPixel(x + 3, y + 1, C_BLACK);
-  tft.fillCircle(x + FROG_SIZE - 4, y + 2, 2, C_WHITE);
-  tft.drawPixel(x + FROG_SIZE - 4, y + 1, C_BLACK);
+  // Hair & Headband
+  tft.fillRect(x + 2, y - 24 + offsetY, 8, 5, C_BROWN);
+  tft.fillRect(x, y - 19 + offsetY, 12, 3, C_YELLOW);
+  tft.fillRoundRect(x + 1, y - 16 + offsetY, 10, 6, 1, C_PEACH);
+  tft.drawPixel(facing == 1 ? x + 8 : x + 2, y - 14 + offsetY, C_BLACK);
 
-  // Feet
-  tft.drawPixel(x, y + 3, C_GREEN);
-  tft.drawPixel(x, y + FROG_SIZE - 3, C_GREEN);
-  tft.drawPixel(x + FROG_SIZE - 1, y + 3, C_GREEN);
-  tft.drawPixel(x + FROG_SIZE - 1, y + FROG_SIZE - 3, C_GREEN);
+  // Karate Suit
+  tft.fillRect(x + 1, y - 10 + offsetY, 10, crouch ? 4 : 6, C_WHITE);
+  tft.fillRect(x + 2, y - 4 + offsetY, 8, 2, C_GREEN);
+
+  // Legs
+  if (!crouch) {
+    tft.fillRect(x + 1, y - 2, 4, 4, C_DGREY);
+    tft.fillRect(x + 7, y - 2, 4, 4, C_DGREY);
+  } else {
+    tft.fillRect(x, y - 1, 12, 3, C_DGREY);
+  }
+
+  // Punch Attack Arm
+  if (punch && !crouch) {
+    int px = (facing == 1) ? x + 10 : x - 6;
+    tft.fillRect(px, y - 10, 6, 4, C_PEACH);
+    tft.drawFastHLine(px, y - 8, 6, C_WHITE);
+  } else if (!crouch) {
+    tft.fillRect(facing == 1 ? x + 8 : x + 1, y - 9, 3, 4, C_WHITE);
+  }
 }
 
-void drawFrogCar(int x, int y, int w, uint16_t col, bool erase) {
+void drawEnemyNinja(int x, int y, int facing, bool erase) {
   if (erase) {
-    tft.fillRect(x - 2, y - 1, w + 4, 16, C_ROADGREY);
+    restoreSceneryRect(x - 6, y - 25, 24, 28);
     return;
   }
-  tft.fillRoundRect(x, y, w, 14, 3, col);
-  tft.fillRect(x + 4, y + 2, w - 8, 4, C_CYAN);
-  tft.fillRect(x + 3, y - 1, 5, 2, C_BLACK);
-  tft.fillRect(x + w - 8, y - 1, 5, 2, C_BLACK);
-  tft.fillRect(x + 3, y + 13, 5, 2, C_BLACK);
-  tft.fillRect(x + w - 8, y + 13, 5, 2, C_BLACK);
+
+  tft.fillRoundRect(x, y - 20, 12, 8, 2, C_RED);
+  tft.drawFastHLine(facing == 1 ? x + 5 : x + 1, y - 16, 5, C_BLACK);
+  tft.fillRect(x + 1, y - 12, 10, 7, C_RED);
+  tft.fillRect(x + 2, y - 5, 8, 2, C_BLACK);
+  tft.fillRect(x + 1, y - 3, 3, 4, C_BLACK);
+  tft.fillRect(x + 7, y - 3, 3, 4, C_BLACK);
 }
 
-void drawFloatingLog(int x, int y, int w, bool erase) {
-  if (erase) {
-    tft.fillRect(x - 2, y, w + 4, 16, C_BLUE);
-    return;
-  }
-  tft.fillRoundRect(x, y + 1, w, 14, 4, C_BROWN);
-  tft.drawFastHLine(x + 5, y + 5, w - 10, C_ORANGE);
-  tft.drawFastHLine(x + 8, y + 9, w - 16, C_BLACK);
+void renderCleanDanArena() {
+  tft.fillRect(0, HUD_H, SCREEN_W, SCREEN_H - HUD_H, DAN_SKY);
+
+  // Distant Mountains
+  tft.fillTriangle(15, 142, 75, 75, 135, 142, DAN_MTN_COL);
+  tft.fillTriangle(185, 142, 250, 70, 315, 142, DAN_MTN_COL);
+
+  // Floating Platform (Wall)
+  tft.fillRoundRect(platX, platY, platW, platH, 3, C_BROWN);
+  tft.drawFastHLine(platX, platY, platW, C_GREEN);
+
+  // Floor Ground
+  tft.fillRect(0, DAN_FLOOR_Y + 2, SCREEN_W, 6, DAN_GRASS);
+  tft.fillRect(0, DAN_FLOOR_Y + 8, SCREEN_W, SCREEN_H - (DAN_FLOOR_Y + 8), DAN_DIRT);
+  tft.drawFastHLine(0, DAN_FLOOR_Y + 2, SCREEN_W, C_GREEN);
+
+  drawDanCloud(danCloud1X, HUD_H + 10, false);
+  drawDanCloud(danCloud2X, HUD_H + 22, false);
+  drawDanBird(danBirdX, danBirdY, danBirdWing, false);
 }
 
-void renderFroggerArena() {
-  // Top Grass & Lilypads
-  tft.fillRect(0, HUD_H, SCREEN_W, 40, C_DGREEN);
-  tft.fillCircle(60, HUD_H + 20, 10, C_YELLOW);
-  tft.fillCircle(160, HUD_H + 20, 10, C_YELLOW);
-  tft.fillCircle(260, HUD_H + 20, 10, C_YELLOW);
+void initDan() {
+  drawGameHUD("DAN THE MAN", C_YELLOW);
+  danX = 40; danY = DAN_FLOOR_Y;
+  oldDanX = 40; oldDanY = DAN_FLOOR_Y;
+  danVy = 0;
+  danGrounded = true;
+  danCrouch = false;
+  danFacing = 1;
+  danPunching = false;
+  danPunchTimer = 0;
 
-  // River Stream
-  tft.fillRect(0, 64, SCREEN_W, 52, C_BLUE);
-  for (int x = 10; x < SCREEN_W; x += 30) {
-    tft.drawFastHLine(x, 90, 12, C_CYAN);
-  }
+  danBulletActive = false;
+  enBulletActive = false;
+  enemyShootTimer = 0;
 
-  // Middle Island Safe Strip
-  tft.fillRect(0, 116, SCREEN_W, 20, C_DGREEN);
+  enemyX = 270; enemyY = DAN_FLOOR_Y;
+  oldEnemyX = 270; oldEnemyY = DAN_FLOOR_Y;
+  enemyDir = -1;
+  enemyAlive = true;
+  enemyHealth = 3;
+  respawnCounter = 0;
 
-  // Highway Asphalt Road
-  tft.fillRect(0, 136, SCREEN_W, 50, C_ROADGREY);
-  for (int x = 0; x < SCREEN_W; x += 24) {
-    tft.drawFastHLine(x, 161, 12, C_WHITE);
-  }
+  danCloud1X = 130;
+  danCloud2X = 270;
+  danBirdX = 210;
+  danBirdY = HUD_H + 16;
+  danTick = 0;
 
-  // Bottom Start Grass
-  tft.fillRect(0, 186, SCREEN_W, SCREEN_H - 186, C_DGREEN);
+  renderCleanDanArena();
+  drawDanSprite(danX, danY, danFacing, danPunching, danCrouch, false);
+  drawEnemyNinja(enemyX, enemyY, enemyDir, false);
 }
 
-void initFrogger() {
-  drawGameHUD("FROGGER ARCADE", C_GREEN);
-  frogX = 153; 
-  frogY = 196;
-  oldFrogX = frogX; 
-  oldFrogY = frogY;
-
-  renderFroggerArena();
-
-  for (int i = 0; i < 2; i++) drawFloatingLog(fLogs[i].x, fLogs[i].y, fLogs[i].width, false);
-  for (int i = 0; i < 3; i++) drawFrogCar(fCars[i].x, fCars[i].y, fCars[i].width, fCars[i].color, false);
-  drawFrogSprite(frogX, frogY, false);
-}
-
-void loopFrogger() {
+void loopDan() {
   if (checkUniversalControls()) return;
   if (isPaused) return;
 
-  frogAnimFrame++;
+  danTick++;
 
-  // 1. Move River Logs
-  for (int i = 0; i < 2; i++) {
-    drawFloatingLog(fLogs[i].x, fLogs[i].y, fLogs[i].width, true);
-    fLogs[i].x += fLogs[i].speed;
-    if (fLogs[i].speed > 0 && fLogs[i].x > SCREEN_W + 10) fLogs[i].x = -fLogs[i].width;
-    drawFloatingLog(fLogs[i].x, fLogs[i].y, fLogs[i].width, false);
+  // --- 1. Ambient Sky Animation ---
+  if (danTick % 3 == 0) {
+    drawDanBird(danBirdX, danBirdY, danBirdWing, true);
+    danBirdX -= 2;
+    if (danBirdX < -15) {
+      danBirdX = 320;
+      danBirdY = random(HUD_H + 8, HUD_H + 34);
+    }
+    if (danTick % 6 == 0) danBirdWing++;
+    drawDanBird(danBirdX, danBirdY, danBirdWing, false);
+
+    tft.fillRect(danCloud1X + 26, HUD_H + 10, 3, 14, DAN_SKY);
+    danCloud1X -= 1;
+    if (danCloud1X < -30) {
+      tft.fillRect(0, HUD_H + 10, 32, 14, DAN_SKY);
+      danCloud1X = 320;
+    }
+    drawDanCloud(danCloud1X, HUD_H + 10, false);
+
+    tft.fillRect(danCloud2X + 26, HUD_H + 22, 3, 14, DAN_SKY);
+    danCloud2X -= 1;
+    if (danCloud2X < -30) {
+      tft.fillRect(0, HUD_H + 22, 32, 14, DAN_SKY);
+      danCloud2X = 320;
+    }
+    drawDanCloud(danCloud2X, HUD_H + 22, false);
   }
 
-  // 2. Move Highway Cars
-  for (int i = 0; i < 3; i++) {
-    drawFrogCar(fCars[i].x, fCars[i].y, fCars[i].width, fCars[i].color, true);
-    fCars[i].x += fCars[i].speed;
-
-    if (fCars[i].speed > 0 && fCars[i].x > SCREEN_W + 10) fCars[i].x = -fCars[i].width;
-    if (fCars[i].speed < 0 && fCars[i].x < -fCars[i].width - 10) fCars[i].x = SCREEN_W + 10;
-
-    drawFrogCar(fCars[i].x, fCars[i].y, fCars[i].width, fCars[i].color, false);
+  // --- 2. Crouch Control ---
+  bool wasCrouching = danCrouch;
+  if (getJoyDown() && danGrounded) {
+    danCrouch = true;
+  } else {
+    danCrouch = false;
   }
 
-  // Road Divider line refresh
-  if (frogAnimFrame % 8 == 0) {
-    for (int x = 0; x < SCREEN_W; x += 24) {
-      tft.drawFastHLine(x, 161, 12, C_WHITE);
+  // --- 3. Walking & Jump Controls ---
+  int nextDanX = danX;
+  if (!danCrouch) {
+    if (getJoyLeft()) {
+      nextDanX -= 6;
+      danFacing = -1;
+    } else if (getJoyRight()) {
+      nextDanX += 6;
+      danFacing = 1;
+    }
+  }
+  nextDanX = constrain(nextDanX, 10, SCREEN_W - 20);
+
+  // Jump [Joy Up]
+  if (getJoyUp() && danGrounded && !danCrouch) {
+    danVy = -7.2;
+    danGrounded = false;
+    sfxJump();
+  }
+
+  // Punch Attack [BTN A]
+  if (isPressed(PIN_BTN_A) && !danPunching && !danCrouch) {
+    danPunching = true;
+    danPunchTimer = 4;
+    playSound(1100, 10);
+
+    if (!danBulletActive) {
+      danBulletActive = true;
+      danBulletDir = danFacing;
+      danBulletX = (danFacing == 1) ? danX + 16 : danX - 8;
+      danBulletY = danY - 10;
     }
   }
 
-  // 3. Frog Movement Controls
-  static unsigned long lastFrogHop = 0;
-  if (millis() - lastFrogHop > 180) {
-    int nextX = frogX;
-    int nextY = frogY;
+  if (danPunchTimer > 0) {
+    danPunchTimer--;
+    if (danPunchTimer == 0) danPunching = false;
+  }
 
-    if (getJoyUp())         { nextY -= FROG_STEP_Y; lastFrogHop = millis(); sfxBounce(); }
-    else if (getJoyDown())  { nextY += FROG_STEP_Y; lastFrogHop = millis(); sfxBounce(); }
-    else if (getJoyLeft())  { nextX -= FROG_STEP_X; lastFrogHop = millis(); sfxBounce(); }
-    else if (getJoyRight()) { nextX += FROG_STEP_X; lastFrogHop = millis(); sfxBounce(); }
+  // --- 4. Platform Drop & Gravity Physics ---
+  bool onPlatformX = (nextDanX + 6 >= platX && nextDanX <= platX + platW);
 
-    nextX = constrain(nextX, 10, SCREEN_W - 20);
-    nextY = constrain(nextY, HUD_H + 10, 196);
+  if (danGrounded && danY == platY && !onPlatformX) {
+    danGrounded = false;
+  }
 
-    if (nextX != frogX || nextY != frogY) {
-      drawFrogSprite(frogX, frogY, true); // Clean erase exactly matching section color
-      frogX = nextX; 
-      frogY = nextY;
-      drawFrogSprite(frogX, frogY, false);
+  if (!danGrounded) {
+    danVy += 0.55;
+    danY += danVy;
+
+    if (danVy >= 0 && danY >= platY && oldDanY <= platY + 6 && onPlatformX) {
+      danY = platY;
+      danVy = 0;
+      danGrounded = true;
+    } else if (danY >= DAN_FLOOR_Y) {
+      danY = DAN_FLOOR_Y;
+      danVy = 0;
+      danGrounded = true;
     }
   }
 
-  // Log Riding Physics
-  if (frogY >= 80 && frogY <= 110) {
-    bool onLog = false;
-    for (int i = 0; i < 2; i++) {
-      if (frogX + (FROG_SIZE / 2) >= fLogs[i].x && frogX + (FROG_SIZE / 2) <= fLogs[i].x + fLogs[i].width) {
-        onLog = true;
-        drawFrogSprite(frogX, frogY, true);
-        frogX += fLogs[i].speed;
-        frogX = constrain(frogX, 10, SCREEN_W - 20);
-        drawFrogSprite(frogX, frogY, false);
-        break;
+  // Redraw Dan Sprite cleanly
+  if (nextDanX != danX || danY != oldDanY || danPunching || danCrouch != wasCrouching) {
+    drawDanSprite(oldDanX, oldDanY, danFacing, false, wasCrouching, true);
+    danX = nextDanX;
+    drawDanSprite(danX, danY, danFacing, danPunching, danCrouch, false);
+    oldDanX = danX;
+    oldDanY = danY;
+  }
+
+  // Platform Edge Guard
+  tft.drawFastHLine(platX, platY, platW, C_GREEN);
+
+  // --- 5. Dan Bullet Projectile ---
+  if (danBulletActive) {
+    restoreSceneryRect(danBulletX, danBulletY, 8, 3);
+    danBulletX += (danBulletDir * 12);
+
+    if (danBulletX < 5 || danBulletX > SCREEN_W - 5) {
+      danBulletActive = false;
+    } else {
+      tft.fillRect(danBulletX, danBulletY, 8, 3, C_YELLOW);
+    }
+  }
+
+  // --- 6. Enemy Ninja AI & Instant Erasure ---
+  if (enemyAlive) {
+    drawEnemyNinja(oldEnemyX, oldEnemyY, enemyDir, true);
+
+    if (enemyX > danX + 40) {
+      enemyDir = -1;
+      enemyX -= 3;
+    } else if (enemyX < danX - 40) {
+      enemyDir = 1;
+      enemyX += 3;
+    }
+
+    oldEnemyX = enemyX;
+    oldEnemyY = enemyY;
+    drawEnemyNinja(enemyX, enemyY, enemyDir, false);
+
+    // Enemy Shoot Logic
+    enemyShootTimer++;
+    if (enemyShootTimer == 22) {
+      tft.setCursor(enemyX + 2, enemyY - 28);
+      tft.setTextColor(C_YELLOW);
+      tft.setTextSize(1);
+      tft.print("!");
+    }
+
+    if (enemyShootTimer > 28 && !enBulletActive) {
+      restoreSceneryRect(enemyX + 2, enemyY - 28, 8, 8);
+      enemyShootTimer = 0;
+      enBulletActive = true;
+      enBulletDir = (danX < enemyX) ? -1 : 1;
+      enBulletX = (enBulletDir == -1) ? enemyX - 6 : enemyX + 14;
+      enBulletY = enemyY - 11;
+      playSound(800, 10);
+    }
+
+    // Damage on Enemy
+    bool hitByBullet = (danBulletActive && abs(danBulletX - enemyX) < 16 && abs(danBulletY - (enemyY - 10)) < 12);
+    bool hitByFist   = (danPunching && abs(danX - enemyX) < 22 && abs(danY - enemyY) < 12);
+
+    if (hitByBullet || hitByFist) {
+      if (hitByBullet) {
+        restoreSceneryRect(danBulletX, danBulletY, 8, 3);
+        danBulletActive = false;
+      }
+      enemyHealth--;
+      playSound(1400, 15);
+      enemyX += (danFacing * 16);
+      enemyX = constrain(enemyX, 20, SCREEN_W - 20);
+
+      // Instant Kill: Turant erase aur frame flush
+      if (enemyHealth <= 0) {
+        drawEnemyNinja(enemyX, enemyY, enemyDir, true);
+        drawEnemyNinja(oldEnemyX, oldEnemyY, enemyDir, true);
+        restoreSceneryRect(enemyX - 8, enemyY - 26, 28, 30);
+        restoreSceneryRect(oldEnemyX - 8, oldEnemyY - 26, 28, 30);
+        enemyAlive = false;
+        respawnCounter = 0;
+        score += 75;
+        sfxScoreDing();
       }
     }
-    if (!onLog) {
+
+    // Direct Collision Damage
+    if (abs(danX - enemyX) < 12 && abs(danY - enemyY) < 12 && !danPunching) {
       sfxExplosion();
-      triggerGameOverScreen("FROG DROWNED IN RIVER");
+      triggerGameOverScreen("SQUASHED BY NINJA");
       return;
+    }
+  } else {
+    // Respawn incoming enemy
+    respawnCounter++;
+    if (respawnCounter > 30) {
+      enemyAlive = true;
+      enemyHealth = 3;
+      enemyX = (danX < 160) ? 290 : 30;
+      oldEnemyX = enemyX;
+      oldEnemyY = enemyY;
+      enemyDir = (enemyX > danX) ? -1 : 1;
+      drawEnemyNinja(enemyX, enemyY, enemyDir, false);
+      respawnCounter = 0;
     }
   }
 
-  drawFrogSprite(frogX, frogY, false);
+  // --- 7. Enemy Bullet Travel & Parry ---
+  if (enBulletActive) {
+    restoreSceneryRect(enBulletX, enBulletY, 5, 5);
+    enBulletX += (enBulletDir * 9);
 
-  // 4. Car Hit Collision
-  for (int i = 0; i < 3; i++) {
-    if (abs(frogY - fCars[i].y) < 12) {
-      if (frogX + FROG_SIZE >= fCars[i].x && frogX <= fCars[i].x + fCars[i].width) {
+    if (enBulletX < 5 || enBulletX > SCREEN_W - 5) {
+      enBulletActive = false;
+    } else {
+      tft.fillRect(enBulletX, enBulletY, 5, 5, C_RED);
+      tft.drawPixel(enBulletX + 2, enBulletY + 2, C_WHITE);
+
+      // Parry Clash
+      if (danBulletActive && abs(danBulletX - enBulletX) < 12 && abs(danBulletY - enBulletY) < 8) {
+        restoreSceneryRect(danBulletX, danBulletY, 8, 3);
+        restoreSceneryRect(enBulletX, enBulletY, 5, 5);
+        danBulletActive = false;
+        enBulletActive = false;
+        sfxBounce();
+      }
+
+      int playerHitH = danCrouch ? 6 : 14;
+      if (abs(enBulletX - danX) < 10 && abs(enBulletY - (danY - 10)) < playerHitH) {
+        restoreSceneryRect(enBulletX, enBulletY, 5, 5);
+        enBulletActive = false;
         sfxExplosion();
-        triggerGameOverScreen("FROG SQUASHED ON ROAD");
+        triggerGameOverScreen("HIT BY ENEMY FIRE");
         return;
       }
     }
   }
 
-  // 5. Goal Success (Lilypads)
-  if (frogY <= HUD_H + 18) {
-    score += 50;
-    sfxScoreDing();
-    drawFrogSprite(frogX, frogY, true);
-    frogX = 153; 
-    frogY = 196;
-    drawFrogSprite(frogX, frogY, false);
-  }
-
   updateHUDScore();
-  delay(24);
+  delay(10);
 }
+
+// System Aliases
+void initFrogger() { initDan(); }
+void loopFrogger() { loopDan(); }
+void initMountainClimb() { initDan(); }
+void loopMountainClimb() { loopDan(); }
 
 
 
